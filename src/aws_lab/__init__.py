@@ -1,0 +1,1 @@
+"""Shared AWS lab package."""
