@@ -17,7 +17,12 @@ BUCKET = os.getenv("S3_BUCKET", "")
 PREFIX = os.getenv("S3_PREFIX", "images/").strip("/") + "/"
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+SNS_TOPIC_ARN = os.getenv(
+    "SNS_TOPIC_ARN",
+    "arn:aws:sns:eu-central-1:642155085753:aws-lab-UploadsNotificationTopic",
+)
 s3 = boto3.client("s3")  # EC2 instance profile via default AWS credential chain
+sns = boto3.client("sns")
 app = FastAPI(title="AWS Image Lab", version="1.0.0")
 
 
@@ -31,6 +36,10 @@ class ImageMetadata(BaseModel):
     size: int
     extension: str
     last_modified: datetime
+
+
+class NotificationEmail(BaseModel):
+    email: str
 
 
 def key_for(name: str) -> str:
@@ -49,6 +58,13 @@ def s3_error(exc: ClientError):
     if code in {"404", "NoSuchKey", "NotFound"}:
         raise HTTPException(404, "Image not found") from exc
     raise HTTPException(502, f"S3 request failed: {code}") from exc
+
+
+def sns_error(exc: ClientError):
+    code = exc.response.get("Error", {}).get("Code", "")
+    if code in {"InvalidParameter", "InvalidParameterValue"}:
+        raise HTTPException(400, "Invalid notification subscription request") from exc
+    raise HTTPException(502, f"SNS request failed: {code}") from exc
 
 
 def metadata_for(name: str) -> ImageMetadata:
@@ -78,6 +94,49 @@ def metadata_for(name: str) -> ImageMetadata:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/notifications/subscribe", status_code=201)
+def subscribe_email(notification: NotificationEmail):
+    try:
+        result = sns.subscribe(
+            TopicArn=SNS_TOPIC_ARN,
+            Protocol="email",
+            Endpoint=notification.email,
+            ReturnSubscriptionArn=True,
+        )
+    except ClientError as exc:
+        sns_error(exc)
+    return {
+        "email": notification.email,
+        "subscription_arn": result.get("SubscriptionArn"),
+        "message": "Subscription request sent. Confirm it from the email inbox.",
+    }
+
+
+@app.post("/notifications/unsubscribe")
+def unsubscribe_email(notification: NotificationEmail):
+    try:
+        pages = sns.get_paginator("list_subscriptions_by_topic").paginate(
+            TopicArn=SNS_TOPIC_ARN
+        )
+        subscription_arn = next(
+            (
+                subscription["SubscriptionArn"]
+                for page in pages
+                for subscription in page.get("Subscriptions", [])
+                if subscription.get("Protocol") == "email"
+                and subscription.get("Endpoint", "").casefold()
+                == notification.email.casefold()
+            ),
+            None,
+        )
+        if subscription_arn is None:
+            raise HTTPException(404, "No SNS subscription found for this email")
+        sns.unsubscribe(SubscriptionArn=subscription_arn)
+    except ClientError as exc:
+        sns_error(exc)
+    return {"email": notification.email, "message": "Email unsubscribed"}
 
 
 @app.post("/images", response_model=ImageMetadata, status_code=201)
