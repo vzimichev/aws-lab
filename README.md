@@ -1,64 +1,49 @@
-# AWS EC2 Location API
+# AWS Image Lab — Sub-task 1
 
-Minimal Python/FastAPI project for the AWS lab Sub-task 4. The `/` endpoint reads the EC2 region and availability zone using IMDSv2. `/health` is a metadata-independent health check for the Application Load Balancer.
+Standalone FastAPI image API for your existing AWS lab. Stores image bytes in S3 and currently derives metadata using S3 `HeadObject`. **RDS is not included yet**; Module 8 Sub-task 2 will introduce PostgreSQL metadata storage.
 
-## Requirements
-
-Python 3.9+; run the location endpoint on an EC2 instance with IMDS enabled.
-
-## Local setup
+## Run locally
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
-uvicorn aws_lab.web.main:app --host 0.0.0.0 --port 8000
+pip install -r requirements.txt
+export S3_BUCKET=YOUR_BUCKET
+export AWS_DEFAULT_REGION=eu-central-1
+# Local development: use an AWS CLI profile or other supported credential provider
+uvicorn app.main:app --reload
 ```
 
-- `http://localhost:8000/health` returns `{"status":"ok"}`.
-- `http://localhost:8000/` returns HTTP 503 when not running on EC2.
+Swagger: http://localhost:8000/docs
 
-## Build a deployable artifact
+## Docker
 
 ```bash
-./scripts/build.sh
+docker build -t aws-image-lab .
+docker run --rm -p 8000:8000 -e S3_BUCKET=YOUR_BUCKET -e AWS_DEFAULT_REGION=eu-central-1 aws-image-lab
 ```
 
-This builds a Python wheel and packages it in `artifacts/aws-lab-deploy.zip`. The wheel contains application code, with dependencies declared in `pyproject.toml`. **Dependencies are installed during deployment**, so the ZIP is not a fully self-contained runtime bundle.
+On EC2, **attach an instance profile** with `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` on `arn:aws:s3:::YOUR_BUCKET/images/*`, and `s3:ListBucket` on `arn:aws:s3:::YOUR_BUCKET` (optionally constrained to the `images/` prefix). boto3 uses the default credential provider chain; do not put access keys in source or environment variables. The EC2 instance needs network connectivity to S3 (NAT or VPC endpoint).
 
-Upload the artifact to S3:
+## API
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/images` | multipart form field `file`, JPEG/PNG/GIF/WebP, max 10 MiB |
+| GET | `/images/{name}` | download |
+| GET | `/images/{name}/metadata` | metadata |
+| GET | `/images/random/metadata` | random metadata |
+| DELETE | `/images/{name}` | delete |
+| GET | `/health` | health check |
+
+Example:
 
 ```bash
-aws s3 cp artifacts/aws-lab-deploy.zip s3://YOUR_BUCKET/releases/aws-lab-deploy.zip --profile userA
+curl -F 'file=@sample.png' http://localhost:8000/images
+curl http://localhost:8000/images/sample.png/metadata
+curl http://localhost:8000/images/random/metadata
+curl -OJ http://localhost:8000/images/sample.png
+curl -X DELETE http://localhost:8000/images/sample.png
 ```
 
-## Deploy on Amazon Linux 2023 EC2
-
-The instance needs an IAM role with `s3:GetObject` for the artifact and outbound network access to S3 and Python package repositories.
-
-```bash
-sudo dnf install -y python3 python3-pip unzip
-aws s3 cp s3://YOUR_BUCKET/releases/aws-lab-deploy.zip /tmp/aws-lab-deploy.zip
-mkdir -p /tmp/aws-lab-wheels
-unzip -o /tmp/aws-lab-deploy.zip -d /tmp/aws-lab-wheels
-sudo python3 -m pip install /tmp/aws-lab-wheels/*.whl
-```
-
-On some Amazon Linux environments, installing into the system Python may be restricted. For a more reliable deployment, create a dedicated virtual environment and install the wheel there:
-
-```bash
-sudo python3 -m venv /opt/aws-lab-venv
-sudo /opt/aws-lab-venv/bin/pip install /tmp/aws-lab-wheels/*.whl
-```
-
-Run:
-
-```bash
-/opt/aws-lab-venv/bin/uvicorn aws_lab.web.main:app --host 0.0.0.0 --port 8000
-```
-
-For a persistent production-like deployment, configure a systemd service. Configure ALB target group health checks on `/health` and port `8000`, and permit port 8000 only from the ALB security group.
-
-## Architecture
-
-Shared metadata code lives in `src/aws_lab/metadata.py`, so a later second artifact can reuse it.
+Names are flat (no folders); uploading the same name overwrites the object. `last_modified` comes from S3 and is in UTC. This lab implementation validates declared MIME type and file size, but does not deeply inspect image bytes. The `/images/random/metadata` endpoint lists all keys under the prefix and is intended for lab-scale use.
