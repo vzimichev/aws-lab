@@ -1,34 +1,62 @@
+import asyncio
+import contextlib
+import json
+import logging
 import os
 import random
 from datetime import datetime
 from pathlib import PurePath
 from typing import Annotated
+from urllib.parse import quote
 
 import boto3
 from botocore.exceptions import ClientError
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import delete_metadata, initialize_database, save_metadata
 
+logger = logging.getLogger(__name__)
 BUCKET = os.getenv("S3_BUCKET", "")
 PREFIX = os.getenv("S3_PREFIX", "images/").strip("/") + "/"
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL", "")
+APP_BASE_URL = os.getenv("APP_BASE_URL", "").rstrip("/")
+SQS_POLL_INTERVAL_SECONDS = int(os.getenv("SQS_POLL_INTERVAL_SECONDS", "5"))
 SNS_TOPIC_ARN = os.getenv(
     "SNS_TOPIC_ARN",
     "arn:aws:sns:eu-central-1:642155085753:aws-lab-UploadsNotificationTopic",
 )
 s3 = boto3.client("s3")  # EC2 instance profile via default AWS credential chain
+sqs = boto3.client("sqs")
 sns = boto3.client("sns")
 app = FastAPI(title="AWS Image Lab", version="1.0.0")
+worker_task: asyncio.Task | None = None
 
 
 @app.on_event("startup")
 def startup() -> None:
     initialize_database()
+
+
+@app.on_event("startup")
+async def start_sqs_worker() -> None:
+    global worker_task
+    if SQS_QUEUE_URL:
+        worker_task = asyncio.create_task(sqs_worker())
+    else:
+        logger.warning("SQS_QUEUE_URL is not set; upload notifications are disabled")
+
+
+@app.on_event("shutdown")
+async def stop_sqs_worker() -> None:
+    if worker_task is not None:
+        worker_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker_task
 
 
 class ImageMetadata(BaseModel):
@@ -40,6 +68,11 @@ class ImageMetadata(BaseModel):
 
 class NotificationEmail(BaseModel):
     email: str
+
+
+def check_queue() -> None:
+    if not SQS_QUEUE_URL:
+        raise HTTPException(503, "SQS_QUEUE_URL environment variable is not set")
 
 
 def key_for(name: str) -> str:
@@ -65,6 +98,91 @@ def sns_error(exc: ClientError):
     if code in {"InvalidParameter", "InvalidParameterValue"}:
         raise HTTPException(400, "Invalid notification subscription request") from exc
     raise HTTPException(502, f"SNS request failed: {code}") from exc
+
+
+def queue_error(exc: ClientError):
+    code = exc.response.get("Error", {}).get("Code", "")
+    raise HTTPException(502, f"SQS request failed: {code}") from exc
+
+
+def download_url(request: Request, name: str) -> str:
+    base_url = APP_BASE_URL or str(request.base_url).rstrip("/")
+    return f"{base_url}/images/{quote(name, safe='')}"
+
+
+def enqueue_upload_event(metadata: ImageMetadata, url: str) -> None:
+    check_queue()
+    message = {
+        "event": "image_uploaded",
+        "image": {
+            "name": metadata.name,
+            "size": metadata.size,
+            "extension": metadata.extension,
+            "download_url": url,
+        },
+    }
+    try:
+        sqs.send_message(QueueUrl=SQS_QUEUE_URL, MessageBody=json.dumps(message))
+    except ClientError as exc:
+        queue_error(exc)
+
+
+def notification_text(message: dict) -> str:
+    image = message["image"]
+    return "\n".join(
+        [
+            "An image has been uploaded to the web application.",
+            f"Name: {image['name']}",
+            f"Size: {image['size']} bytes",
+            f"Extension: {image['extension']}",
+            f"Download: {image['download_url']}",
+        ]
+    )
+
+
+def process_sqs_batch() -> None:
+    response = sqs.receive_message(
+        QueueUrl=SQS_QUEUE_URL,
+        MaxNumberOfMessages=10,
+        WaitTimeSeconds=20,
+        VisibilityTimeout=60,
+        MessageAttributeNames=["All"],
+    )
+    for message in response.get("Messages", []):
+        try:
+            event = json.loads(message["Body"])
+            if event.get("event") != "image_uploaded":
+                logger.warning("Ignoring unknown SQS event: %s", event.get("event"))
+                delete_message(message["ReceiptHandle"])
+                continue
+            sns.publish(
+                TopicArn=SNS_TOPIC_ARN,
+                Subject="Image uploaded",
+                Message=notification_text(event),
+            )
+            delete_message(message["ReceiptHandle"])
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.error("Dropping malformed SQS message: %s", exc)
+            delete_message(message["ReceiptHandle"])
+        except ClientError:
+            logger.exception("Could not publish SQS message to SNS; it will be retried")
+
+
+def delete_message(receipt_handle: str) -> None:
+    sqs.delete_message(QueueUrl=SQS_QUEUE_URL, ReceiptHandle=receipt_handle)
+
+
+async def sqs_worker() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(process_sqs_batch)
+        except asyncio.CancelledError:
+            raise
+        except ClientError:
+            logger.exception("SQS polling failed; retrying")
+        except Exception:
+            logger.exception("Unexpected SQS worker error; retrying")
+        await asyncio.sleep(SQS_POLL_INTERVAL_SECONDS)
 
 
 def metadata_for(name: str) -> ImageMetadata:
@@ -140,7 +258,7 @@ def unsubscribe_email(notification: NotificationEmail):
 
 
 @app.post("/images", response_model=ImageMetadata, status_code=201)
-def upload_image(file: Annotated[UploadFile, File()]):
+def upload_image(request: Request, file: Annotated[UploadFile, File()]):
     check_bucket()
     name = file.filename or ""
     key = key_for(name)
@@ -156,7 +274,9 @@ def upload_image(file: Annotated[UploadFile, File()]):
         s3.put_object(Bucket=BUCKET, Key=key, Body=content, ContentType=file.content_type)
     except ClientError as exc:
         s3_error(exc)
-    return metadata_for(name)
+    metadata = metadata_for(name)
+    enqueue_upload_event(metadata, download_url(request, name))
+    return metadata
 
 
 @app.get("/images/random/metadata", response_model=ImageMetadata)
