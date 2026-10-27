@@ -1,8 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   AWS Lab Module 8: EC2 application from a custom AMI with an IAM role and an
-  S3 bucket for image storage, an SQS upload-events queue, and an SNS
-  notifications topic.
+  S3 bucket for image storage.
 
 Parameters:
   AmiId:
@@ -55,6 +54,16 @@ Parameters:
     Default: python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
     Description: Command used by systemd to start the application.
 
+  SqsQueueUrl:
+    Type: String
+    Default: ''
+    Description: SQS queue URL from the Module 9 stack.
+
+  SnsTopicArn:
+    Type: String
+    Default: ''
+    Description: SNS topic ARN from the Module 9 stack.
+
 Conditions:
   HasCustomBucketName: !Not [!Equals [!Ref BucketName, '']]
 
@@ -74,18 +83,6 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
-
-  UploadsNotificationQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: aws-lab-UploadsNotificationQueue
-      ReceiveMessageWaitTimeSeconds: 20
-      VisibilityTimeout: 60
-
-  UploadsNotificationTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: aws-lab-UploadsNotificationTopic
 
   Ec2Role:
     Type: AWS::IAM::Role
@@ -118,23 +115,6 @@ Resources:
                   - s3:PutObject
                   - s3:DeleteObject
                 Resource: !Sub '${ImageBucket.Arn}/images/*'
-              - Sid: UploadNotificationsQueue
-                Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt UploadsNotificationQueue.Arn
-              - Sid: UploadNotificationsTopic
-                Effect: Allow
-                Action:
-                  - sns:Publish
-                  - sns:Subscribe
-                  - sns:ListSubscriptionsByTopic
-                  - sns:Unsubscribe
-                Resource: !Ref UploadsNotificationTopic
-
   Ec2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
@@ -188,8 +168,8 @@ Resources:
             S3_BUCKET=${ImageBucket}
             S3_PREFIX=images/
             AWS_DEFAULT_REGION=${AWS::Region}
-            SQS_QUEUE_URL=${UploadsNotificationQueue}
-            SNS_TOPIC_ARN=${UploadsNotificationTopic}
+            SQS_QUEUE_URL=${SqsQueueUrl}
+            SNS_TOPIC_ARN=${SnsTopicArn}
             EOF
 
             cat > /etc/systemd/system/aws-image-lab.service <<'EOF'
@@ -217,18 +197,6 @@ Outputs:
   BucketName:
     Description: S3 bucket used for image storage.
     Value: !Ref ImageBucket
-
-  QueueUrl:
-    Description: SQS queue used for image upload events.
-    Value: !Ref UploadsNotificationQueue
-
-  QueueArn:
-    Description: ARN of the SQS upload-events queue.
-    Value: !GetAtt UploadsNotificationQueue.Arn
-
-  TopicArn:
-    Description: SNS topic used for image upload notifications.
-    Value: !Ref UploadsNotificationTopic
 
   InstanceId:
     Description: EC2 instance ID.

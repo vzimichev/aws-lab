@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  AWS Lab Module 9: SQS upload events and SNS image notifications for an
+  existing EC2 application role.
+
+Parameters:
+  Ec2RoleName:
+    Type: String
+    Description: Existing EC2 IAM role name used by the web application.
+
+  QueueName:
+    Type: String
+    Default: aws-lab-UploadsNotificationQueue
+
+  TopicName:
+    Type: String
+    Default: aws-lab-UploadsNotificationTopic
+
+Resources:
+  UploadsNotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Ref QueueName
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: 60
+
+  UploadsNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Ref TopicName
+
+  WebApplicationNotificationAccess:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: AwsLabModule9NotificationAccess
+      Roles:
+        - !Ref Ec2RoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: UploadNotificationsQueue
+            Effect: Allow
+            Action:
+              - sqs:SendMessage
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:GetQueueAttributes
+            Resource: !GetAtt UploadsNotificationQueue.Arn
+          - Sid: UploadNotificationsTopic
+            Effect: Allow
+            Action:
+              - sns:Publish
+              - sns:Subscribe
+              - sns:ListSubscriptionsByTopic
+              - sns:Unsubscribe
+            Resource: !Ref UploadsNotificationTopic
+
+Outputs:
+  QueueUrl:
+    Description: SQS queue URL used for image upload events.
+    Value: !Ref UploadsNotificationQueue
+
+  QueueArn:
+    Description: SQS queue ARN used for image upload events.
+    Value: !GetAtt UploadsNotificationQueue.Arn
+
+  TopicArn:
+    Description: SNS topic ARN used for image upload notifications.
+    Value: !Ref UploadsNotificationTopic
