@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Lab Module 8, Sub-task 2: PostgreSQL RDS for image metadata.
+  This template assumes that the VPC and EC2 application security group already
+  exist, and creates two private DB subnets inside that VPC.'
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC containing the EC2 application and database subnets.
+
+  AppSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: EC2 security group allowed to connect to PostgreSQL.
+
+  PrivateSubnet1Cidr:
+    Type: String
+    Default: 172.31.64.0/20
+    Description: CIDR for the first private DB subnet. Must not overlap existing VPC
+      subnets.
+
+  PrivateSubnet2Cidr:
+    Type: String
+    Default: 172.31.80.0/20
+    Description: CIDR for the second private DB subnet. Must not overlap existing
+      VPC subnets.
+
+  PrivateSubnet1AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: eu-central-1a
+
+  PrivateSubnet2AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: eu-central-1b
+
+  MasterUsername:
+    Type: String
+    Default: app_admin
+    MinLength: 1
+    MaxLength: 128
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9_]*'
+    ConstraintDescription: Must start with a letter and contain only letters,
+      numbers, and underscores.
+
+  MasterUserPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 12
+    MaxLength: 128
+    Description: PostgreSQL master password. Do not store this value in Git.
+
+  DatabaseName:
+    Type: String
+    Default: images
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9_]*'
+
+  DatabaseInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t3.micro
+      - db.t4g.micro
+      - db.t3.small
+      - db.t4g.small
+
+  EnableIamDatabaseAuthentication:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Optional IAM authentication for a later lab step.
+
+Resources:
+  PrivateDbSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref PrivateSubnet1Cidr
+      AvailabilityZone: !Ref PrivateSubnet1AvailabilityZone
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: aws-image-lab-private-db-a
+
+  PrivateDbSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref PrivateSubnet2Cidr
+      AvailabilityZone: !Ref PrivateSubnet2AvailabilityZone
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: aws-image-lab-private-db-b
+
+  PrivateDbRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: aws-image-lab-private-db
+
+  PrivateDbSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateDbRouteTable
+      SubnetId: !Ref PrivateDbSubnet1
+
+  PrivateDbSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateDbRouteTable
+      SubnetId: !Ref PrivateDbSubnet2
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow PostgreSQL only from the EC2 application security group.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: PostgreSQL from the FastAPI EC2 instance
+          IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSecurityGroupId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: aws-image-lab-rds
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for the AWS Image Lab PostgreSQL database.
+      SubnetIds:
+        - !Ref PrivateDbSubnet1
+        - !Ref PrivateDbSubnet2
+      Tags:
+        - Key: Name
+          Value: aws-image-lab-rds-subnets
+
+  ImageMetadataDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Engine: postgres
+      DBInstanceClass: !Ref DatabaseInstanceClass
+      AllocatedStorage: '20'
+      MaxAllocatedStorage: 20
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: !Ref DatabaseName
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Ref MasterUserPassword
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 0
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: false
+      EnableIAMDatabaseAuthentication: false
+
+Outputs:
+  DatabaseEndpointAddress:
+    Description: Private DNS address for PostgreSQL connections from EC2.
+    Value: !GetAtt ImageMetadataDatabase.Endpoint.Address
+
+  DatabaseEndpointPort:
+    Description: PostgreSQL port.
+    Value: !GetAtt ImageMetadataDatabase.Endpoint.Port
+
+  DatabaseName:
+    Description: PostgreSQL database name.
+    Value: !Ref DatabaseName
+
+  DatabaseSecurityGroupId:
+    Description: Security group attached to the RDS instance.
+    Value: !Ref DatabaseSecurityGroup
+
+  PrivateDbSubnet1Id:
+    Description: First private DB subnet.
+    Value: !Ref PrivateDbSubnet1
+
+  PrivateDbSubnet2Id:
+    Description: Second private DB subnet.
+    Value: !Ref PrivateDbSubnet2

@@ -9,6 +9,9 @@ from botocore.exceptions import ClientError
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.db import delete_metadata, initialize_database, save_metadata
 
 BUCKET = os.getenv("S3_BUCKET", "")
 PREFIX = os.getenv("S3_PREFIX", "images/").strip("/") + "/"
@@ -16,6 +19,11 @@ MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 s3 = boto3.client("s3")  # EC2 instance profile via default AWS credential chain
 app = FastAPI(title="AWS Image Lab", version="1.0.0")
+
+
+@app.on_event("startup")
+def startup() -> None:
+    initialize_database()
 
 
 class ImageMetadata(BaseModel):
@@ -49,9 +57,22 @@ def metadata_for(name: str) -> ImageMetadata:
         obj = s3.head_object(Bucket=BUCKET, Key=key_for(name))
     except ClientError as exc:
         s3_error(exc)
-    return ImageMetadata(name=name, size=obj["ContentLength"],
-                         extension=PurePath(name).suffix.lstrip(".").lower(),
-                         last_modified=obj["LastModified"])
+    metadata = ImageMetadata(
+        name=name,
+        size=obj["ContentLength"],
+        extension=PurePath(name).suffix.lstrip(".").lower(),
+        last_modified=obj["LastModified"],
+    )
+    try:
+        save_metadata(
+            name=metadata.name,
+            size=metadata.size,
+            extension=metadata.extension,
+            last_modified=metadata.last_modified,
+        )
+    except (RuntimeError, SQLAlchemyError) as exc:
+        raise HTTPException(503, "Image metadata database is unavailable") from exc
+    return metadata
 
 
 @app.get("/health")
@@ -136,3 +157,7 @@ def delete_image(name: str):
         s3.delete_object(Bucket=BUCKET, Key=key_for(name))
     except ClientError as exc:
         s3_error(exc)
+    try:
+        delete_metadata(name)
+    except (RuntimeError, SQLAlchemyError) as exc:
+        raise HTTPException(503, "Image metadata database is unavailable") from exc

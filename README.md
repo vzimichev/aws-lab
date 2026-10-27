@@ -10,6 +10,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 export S3_BUCKET=YOUR_BUCKET
 export AWS_DEFAULT_REGION=eu-central-1
+# Optional PostgreSQL/RDS metadata storage:
+export DATABASE_URL='postgresql+psycopg://USERNAME:PASSWORD@RDS_ENDPOINT:5432/images'
 # Local development: use an AWS CLI profile or other supported credential provider
 uvicorn app.main:app --reload
 ```
@@ -47,3 +49,8 @@ curl -X DELETE http://localhost:8000/images/sample.png
 ```
 
 Names are flat (no folders); uploading the same name overwrites the object. `last_modified` comes from S3 and is in UTC. This lab implementation validates declared MIME type and file size, but does not deeply inspect image bytes. The `/images/random/metadata` endpoint lists all keys under the prefix and is intended for lab-scale use.
+
+When `DATABASE_URL` is configured, the application creates the `image_metadata` table
+on startup and upserts metadata after an S3 upload or metadata lookup. Deleting an
+image removes its metadata row as well. The application continues to support S3-only
+mode when `DATABASE_URL` is not set.
