@@ -23,7 +23,7 @@ SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL", "")
 APP_BASE_URL = os.getenv("APP_BASE_URL", "").rstrip("/")
 SNS_TOPIC_ARN = os.getenv(
     "SNS_TOPIC_ARN",
-    "arn:aws:sns:eu-central-1:642155085753:aws-lab-UploadsNotificationTopic",
+    "",
 )
 s3 = boto3.client("s3")  # EC2 instance profile via default AWS credential chain
 sqs = boto3.client("sqs")
@@ -50,6 +50,11 @@ class NotificationEmail(BaseModel):
 def check_queue() -> None:
     if not SQS_QUEUE_URL:
         raise HTTPException(503, "SQS_QUEUE_URL environment variable is not set")
+
+
+def check_topic() -> None:
+    if not SNS_TOPIC_ARN:
+        raise HTTPException(503, "SNS_TOPIC_ARN environment variable is not set")
 
 
 def key_for(name: str) -> str:
@@ -135,6 +140,7 @@ def health():
 
 @app.post("/notifications/subscribe", status_code=201)
 def subscribe_email(notification: NotificationEmail):
+    check_topic()
     try:
         result = sns.subscribe(
             TopicArn=SNS_TOPIC_ARN,
@@ -153,6 +159,7 @@ def subscribe_email(notification: NotificationEmail):
 
 @app.post("/notifications/unsubscribe")
 def unsubscribe_email(notification: NotificationEmail):
+    check_topic()
     try:
         pages = sns.get_paginator("list_subscriptions_by_topic").paginate(
             TopicArn=SNS_TOPIC_ARN

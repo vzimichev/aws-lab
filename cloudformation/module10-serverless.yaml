@@ -1,0 +1,99 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  AWS Lab Module 10: Lambda consumes upload notifications from the existing
+  SQS queue and publishes them to the existing SNS topic.
+
+Parameters:
+  CodeS3Bucket:
+    Type: String
+    Description: S3 bucket containing the Lambda deployment package.
+
+  CodeS3Key:
+    Type: String
+    Description: S3 key for the Lambda deployment package zip.
+
+  ExistingQueueArn:
+    Type: String
+    Description: ARN of the existing Module 9 upload notification queue.
+
+  ExistingTopicArn:
+    Type: String
+    Description: ARN of the existing Module 9 upload notification topic.
+
+  LambdaFunctionName:
+    Type: String
+    Default: aws-lab-UploadsNotificationFunction
+    Description: Name of the Lambda function.
+
+  LambdaRoleName:
+    Type: String
+    Default: aws-lab-UploadsNotificationRole
+    Description: Name of the Lambda execution role.
+
+Resources:
+  UploadsNotificationLambdaRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RoleName: !Ref LambdaRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
+      Policies:
+        - PolicyName: PublishUploadNotifications
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref ExistingTopicArn
+
+  UploadsNotificationFunction:
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Runtime: python3.13
+      Handler: lambda_function.lambda_handler
+      Architectures:
+        - x86_64
+      Timeout: 30
+      Role: !GetAtt UploadsNotificationLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref CodeS3Bucket
+        S3Key: !Ref CodeS3Key
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref ExistingTopicArn
+
+  UploadsNotificationEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      EventSourceArn: !Ref ExistingQueueArn
+      FunctionName: !Ref UploadsNotificationFunction
+      BatchSize: 1
+      Enabled: true
+
+Outputs:
+  LambdaFunctionArn:
+    Description: ARN of the SQS-to-SNS notification Lambda.
+    Value: !GetAtt UploadsNotificationFunction.Arn
+
+  LambdaExecutionRoleArn:
+    Description: ARN of the Lambda execution role.
+    Value: !GetAtt UploadsNotificationLambdaRole.Arn
+
+  EventSourceMappingId:
+    Description: ID of the SQS event source mapping.
+    Value: !Ref UploadsNotificationEventSourceMapping

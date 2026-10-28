@@ -6,7 +6,7 @@ Description: >-
 Parameters:
   AmiId:
     Type: AWS::EC2::Image::Id
-    Default: ami-045953348f198efe9
+    Default: ami-01f8fef2d4d9b4a56
     Description: Custom AMI containing the FastAPI application.
 
   VpcId:

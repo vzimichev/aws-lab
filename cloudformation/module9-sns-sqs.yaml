@@ -22,7 +22,7 @@ Resources:
     Properties:
       QueueName: !Ref QueueName
       ReceiveMessageWaitTimeSeconds: 20
-      VisibilityTimeout: 60
+      VisibilityTimeout: 180
 
   UploadsNotificationTopic:
     Type: AWS::SNS::Topic
@@ -42,14 +42,10 @@ Resources:
             Effect: Allow
             Action:
               - sqs:SendMessage
-              - sqs:ReceiveMessage
-              - sqs:DeleteMessage
-              - sqs:GetQueueAttributes
             Resource: !GetAtt UploadsNotificationQueue.Arn
           - Sid: UploadNotificationsTopic
             Effect: Allow
             Action:
-              - sns:Publish
               - sns:Subscribe
               - sns:ListSubscriptionsByTopic
               - sns:Unsubscribe
