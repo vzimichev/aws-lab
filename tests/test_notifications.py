@@ -11,6 +11,25 @@ from app import main
 
 
 class NotificationTests(unittest.TestCase):
+    def test_data_consistency_endpoint_invokes_lambda_asynchronously(self):
+        lambda_client = Mock()
+
+        with patch.object(main, "lambda_client", lambda_client):
+            response = main.trigger_data_consistency()
+
+        lambda_client.invoke.assert_called_once_with(
+            FunctionName="aws-lab-DataConsistencyFunction",
+            InvocationType="Event",
+            Payload=b"{}",
+        )
+        self.assertEqual(
+            response,
+            {
+                "status": "accepted",
+                "function_name": "aws-lab-DataConsistencyFunction",
+            },
+        )
+
     def test_upload_event_keeps_existing_payload_and_only_sends_to_sqs(self):
         sqs = Mock()
         metadata = main.ImageMetadata(

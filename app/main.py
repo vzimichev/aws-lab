@@ -28,7 +28,13 @@ SNS_TOPIC_ARN = os.getenv(
 s3 = boto3.client("s3")  # EC2 instance profile via default AWS credential chain
 sqs = boto3.client("sqs")
 sns = boto3.client("sns")
+lambda_client = boto3.client("lambda")
 app = FastAPI(title="AWS Image Lab", version="1.0.0")
+
+DATA_CONSISTENCY_FUNCTION_NAME = os.getenv(
+    "DATA_CONSISTENCY_FUNCTION_NAME",
+    "aws-lab-DataConsistencyFunction",
+)
 
 
 @app.on_event("startup")
@@ -66,6 +72,24 @@ def key_for(name: str) -> str:
 def check_bucket() -> None:
     if not BUCKET:
         raise HTTPException(503, "S3_BUCKET environment variable is not set")
+
+
+@app.post("/data-consistency/trigger", status_code=202)
+def trigger_data_consistency():
+    """Start the asynchronous data consistency check Lambda."""
+    try:
+        lambda_client.invoke(
+            FunctionName=DATA_CONSISTENCY_FUNCTION_NAME,
+            InvocationType="Event",
+            Payload=b"{}",
+        )
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        raise HTTPException(502, f"Data consistency Lambda invocation failed: {code}") from exc
+    return {
+        "status": "accepted",
+        "function_name": DATA_CONSISTENCY_FUNCTION_NAME,
+    }
 
 
 def s3_error(exc: ClientError):
