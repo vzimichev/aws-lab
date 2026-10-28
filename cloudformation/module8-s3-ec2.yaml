@@ -182,7 +182,6 @@ Resources:
             AWS_DEFAULT_REGION=${AWS::Region}
             SQS_QUEUE_URL=${SqsQueueUrl}
             SNS_TOPIC_ARN=${SnsTopicArn}
-            DATA_CONSISTENCY_FUNCTION_NAME=${DataConsistencyFunctionName}
             EOF
 
             cat > /etc/systemd/system/aws-image-lab.service <<'EOF'
