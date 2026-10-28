@@ -34,6 +34,20 @@ Resources:
         - Key: Name
           Value: !Sub '${ProjectName}-S3Endpoint'
 
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
+      SubnetIds: !Ref LambdaSubnetIds
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-SecretsManagerEndpoint'
+
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -55,9 +69,21 @@ Resources:
       ToPort: 5432
       SourceSecurityGroupId: !Ref LambdaSecurityGroup
 
+  SecretsManagerEndpointIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref LambdaSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
 Outputs:
   S3EndpointId:
     Value: !Ref S3GatewayEndpoint
+
+  SecretsManagerEndpointId:
+    Value: !Ref SecretsManagerEndpoint
 
   LambdaSecurityGroupId:
     Value: !Ref LambdaSecurityGroup

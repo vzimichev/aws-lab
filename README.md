@@ -46,6 +46,18 @@ On EC2, **attach an instance profile** with `s3:PutObject`, `s3:GetObject`, `s3:
 - `AWS::Lambda::Function` using Python 3.13, x86_64, a 30-second timeout, and handler `lambda_function.lambda_handler`.
 - `AWS::Lambda::EventSourceMapping` for the existing queue with batch size 1.
 
+### Data consistency Lambda
+
+The data consistency workflow is managed by these CloudFormation templates:
+
+- `cloudformation/module10-database-secret.yaml` stores the existing PostgreSQL `DATABASE_URL` in Secrets Manager.
+- `cloudformation/module10-lambda-vpc-ep.yaml` creates the S3 Gateway Endpoint, Secrets Manager Interface Endpoint, Lambda security group, and RDS ingress.
+- `cloudformation/module10-data-consistency.yaml` manages the imported `aws-lab-DataConsistencyFunction` and `aws-lab-DataConsistencyLambdaRole`.
+
+The Lambda package is built from `lambda_data_consistency.py` with `lambda_requirements.txt` for Python 3.13 x86_64, uploaded to S3, and referenced by `LambdaCodeBucket`/`LambdaCodeKey`. The function reads its database URL from Secrets Manager, initializes the PostgreSQL connection outside the handler, and compares `image_metadata` rows with objects under the configured S3 prefix.
+
+The existing manual Lambda and IAM role were imported into the `aws-lab-module10-data-consistency` stack. Do not create another function with the same name; update the stack and change `DeploymentVersion` whenever the package changes.
+
 The Lambda, role, and mapping have `Retain` deletion policies because a manually-created Lambda already exists in the account. Do not run a normal create/update with the default function name until the existing function has been imported or a replacement has been explicitly approved.
 
 ### Package and validate Lambda

@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Module 10 Data Consistency Lambda and its IAM permissions.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aws-lab
+
+  ImageBucketName:
+    Type: String
+    Description: Existing Module 4/8 S3 bucket containing image objects.
+
+  DatabaseSecretArn:
+    Type: String
+    Description: Secrets Manager ARN containing the PostgreSQL DATABASE_URL.
+
+  LambdaCodeBucket:
+    Type: String
+    Description: S3 bucket containing the Lambda deployment package.
+
+  LambdaCodeKey:
+    Type: String
+    Description: S3 key containing the Lambda deployment package.
+
+  LambdaSubnetIds:
+    Type: CommaDelimitedList
+    Description: Private subnets in the Module 8 VPC.
+
+  LambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group allowed to reach the Module 8 RDS security group.
+
+  LambdaFunctionName:
+    Type: String
+    Default: aws-lab-DataConsistencyFunction
+
+  LambdaRoleName:
+    Type: String
+    Default: aws-lab-DataConsistencyLambdaRole
+
+  S3Prefix:
+    Type: String
+    Default: images/
+
+  DeploymentVersion:
+    Type: String
+    Description: Changes whenever the Lambda package is rebuilt.
+
+Resources:
+  DataConsistencyLambdaRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RoleName: !Ref LambdaRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: S3ImageReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ListImages
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub arn:${AWS::Partition}:s3:::${ImageBucketName}
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - !Ref S3Prefix
+                      - !Sub '${S3Prefix}*'
+              - Sid: ReadImages
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub arn:${AWS::Partition}:s3:::${ImageBucketName}/${S3Prefix}*
+              - Sid: ReadDatabaseUrl
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseSecretArn
+
+  DataConsistencyFunction:
+    Type: AWS::Lambda::Function
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Runtime: python3.13
+      Handler: lambda_data_consistency.lambda_handler
+      Architectures:
+        - x86_64
+      MemorySize: 256
+      Timeout: 30
+      Role: !GetAtt DataConsistencyLambdaRole.Arn
+      VpcConfig:
+        SubnetIds: !Ref LambdaSubnetIds
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref ImageBucketName
+          S3_PREFIX: !Ref S3Prefix
+          DATABASE_URL_SECRET_ARN: !Ref DatabaseSecretArn
+          DEPLOYMENT_VERSION: !Ref DeploymentVersion
