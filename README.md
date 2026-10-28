@@ -28,7 +28,7 @@ docker build -t aws-image-lab .
 docker run --rm -p 8000:8000 -e S3_BUCKET=YOUR_BUCKET -e AWS_DEFAULT_REGION=eu-central-1 aws-image-lab
 ```
 
-On EC2, **attach an instance profile** with `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` on `arn:aws:s3:::YOUR_BUCKET/images/*`, `s3:ListBucket` on `arn:aws:s3:::YOUR_BUCKET` (optionally constrained to the `images/` prefix), `sqs:SendMessage`, `sqs:ReceiveMessage`, `sqs:DeleteMessage`, and `sqs:GetQueueAttributes` on the configured queue, and `sns:Subscribe`, `sns:ListSubscriptionsByTopic`, `sns:Unsubscribe`, and `sns:Publish` on the configured topic. boto3 uses the default credential provider chain; do not put access keys in source or environment variables. The EC2 instance needs network connectivity to S3/SQS/SNS (NAT or VPC endpoints).
+On EC2, **attach an instance profile** with `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` on `arn:aws:s3:::YOUR_BUCKET/images/*`, `s3:ListBucket` on `arn:aws:s3:::YOUR_BUCKET` (optionally constrained to the `images/` prefix), `sqs:SendMessage` on the configured queue, and `sns:Subscribe`, `sns:ListSubscriptionsByTopic`, and `sns:Unsubscribe` on the configured topic. boto3 uses the default credential provider chain; do not put access keys in source or environment variables. The EC2 instance needs network connectivity to S3/SQS/SNS (NAT or VPC endpoints).
 
 ## API
 
@@ -57,7 +57,7 @@ curl -X POST http://localhost:8000/notifications/unsubscribe \\
   -H 'Content-Type: application/json' -d '{"email":"user@example.com"}'
 ```
 
-SNS sends a confirmation email after subscribing. The email address must be confirmed before SNS delivers notifications. The unsubscribe endpoint looks up the confirmed or pending email subscription in the configured topic. After an upload, the application puts an event on SQS. A background worker receives up to 10 events at a time, publishes plain-text notifications to SNS, and deletes each SQS message only after publishing succeeds.
+SNS sends a confirmation email after subscribing. The email address must be confirmed before SNS delivers notifications. The unsubscribe endpoint looks up the confirmed or pending email subscription in the configured topic. After an upload, the application puts the existing event payload on SQS. An AWS Lambda function consumes the queue and publishes the notification to SNS.
 
 Names are flat (no folders); uploading the same name overwrites the object. `last_modified` comes from S3 and is in UTC. This lab implementation validates declared MIME type and file size, but does not deeply inspect image bytes. The `/images/random/metadata` endpoint lists all keys under the prefix and is intended for lab-scale use.
 

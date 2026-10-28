@@ -1,7 +1,4 @@
-import asyncio
-import contextlib
 import json
-import logging
 import os
 import random
 from datetime import datetime
@@ -18,14 +15,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import delete_metadata, initialize_database, save_metadata
 
-logger = logging.getLogger(__name__)
 BUCKET = os.getenv("S3_BUCKET", "")
 PREFIX = os.getenv("S3_PREFIX", "images/").strip("/") + "/"
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL", "")
 APP_BASE_URL = os.getenv("APP_BASE_URL", "").rstrip("/")
-SQS_POLL_INTERVAL_SECONDS = int(os.getenv("SQS_POLL_INTERVAL_SECONDS", "5"))
 SNS_TOPIC_ARN = os.getenv(
     "SNS_TOPIC_ARN",
     "arn:aws:sns:eu-central-1:642155085753:aws-lab-UploadsNotificationTopic",
@@ -34,29 +29,11 @@ s3 = boto3.client("s3")  # EC2 instance profile via default AWS credential chain
 sqs = boto3.client("sqs")
 sns = boto3.client("sns")
 app = FastAPI(title="AWS Image Lab", version="1.0.0")
-worker_task: asyncio.Task | None = None
 
 
 @app.on_event("startup")
 def startup() -> None:
     initialize_database()
-
-
-@app.on_event("startup")
-async def start_sqs_worker() -> None:
-    global worker_task
-    if SQS_QUEUE_URL:
-        worker_task = asyncio.create_task(sqs_worker())
-    else:
-        logger.warning("SQS_QUEUE_URL is not set; upload notifications are disabled")
-
-
-@app.on_event("shutdown")
-async def stop_sqs_worker() -> None:
-    if worker_task is not None:
-        worker_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await worker_task
 
 
 class ImageMetadata(BaseModel):
@@ -125,64 +102,6 @@ def enqueue_upload_event(metadata: ImageMetadata, url: str) -> None:
         sqs.send_message(QueueUrl=SQS_QUEUE_URL, MessageBody=json.dumps(message))
     except ClientError as exc:
         queue_error(exc)
-
-
-def notification_text(message: dict) -> str:
-    image = message["image"]
-    return "\n".join(
-        [
-            "An image has been uploaded to the web application.",
-            f"Name: {image['name']}",
-            f"Size: {image['size']} bytes",
-            f"Extension: {image['extension']}",
-            f"Download: {image['download_url']}",
-        ]
-    )
-
-
-def process_sqs_batch() -> None:
-    response = sqs.receive_message(
-        QueueUrl=SQS_QUEUE_URL,
-        MaxNumberOfMessages=10,
-        WaitTimeSeconds=20,
-        VisibilityTimeout=60,
-        MessageAttributeNames=["All"],
-    )
-    for message in response.get("Messages", []):
-        try:
-            event = json.loads(message["Body"])
-            if event.get("event") != "image_uploaded":
-                logger.warning("Ignoring unknown SQS event: %s", event.get("event"))
-                delete_message(message["ReceiptHandle"])
-                continue
-            sns.publish(
-                TopicArn=SNS_TOPIC_ARN,
-                Subject="Image uploaded",
-                Message=notification_text(event),
-            )
-            delete_message(message["ReceiptHandle"])
-        except (KeyError, TypeError, ValueError) as exc:
-            logger.error("Dropping malformed SQS message: %s", exc)
-            delete_message(message["ReceiptHandle"])
-        except ClientError:
-            logger.exception("Could not publish SQS message to SNS; it will be retried")
-
-
-def delete_message(receipt_handle: str) -> None:
-    sqs.delete_message(QueueUrl=SQS_QUEUE_URL, ReceiptHandle=receipt_handle)
-
-
-async def sqs_worker() -> None:
-    while True:
-        try:
-            await asyncio.to_thread(process_sqs_batch)
-        except asyncio.CancelledError:
-            raise
-        except ClientError:
-            logger.exception("SQS polling failed; retrying")
-        except Exception:
-            logger.exception("Unexpected SQS worker error; retrying")
-        await asyncio.sleep(SQS_POLL_INTERVAL_SECONDS)
 
 
 def metadata_for(name: str) -> ImageMetadata:
