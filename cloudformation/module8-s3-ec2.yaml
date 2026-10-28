@@ -64,6 +64,11 @@ Parameters:
     Default: ''
     Description: SNS topic ARN from the Module 9 stack.
 
+  DataConsistencyFunctionName:
+    Type: String
+    Default: aws-lab-DataConsistencyFunction
+    Description: Lambda function invoked by the data consistency endpoint.
+
 Conditions:
   HasCustomBucketName: !Not [!Equals [!Ref BucketName, '']]
 
@@ -115,6 +120,13 @@ Resources:
                   - s3:PutObject
                   - s3:DeleteObject
                 Resource: !Sub '${ImageBucket.Arn}/images/*'
+              - Sid: InvokeDataConsistencyFunction
+                Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Sub
+                  - 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${FunctionName}'
+                  - FunctionName: !Ref DataConsistencyFunctionName
   Ec2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
@@ -170,6 +182,7 @@ Resources:
             AWS_DEFAULT_REGION=${AWS::Region}
             SQS_QUEUE_URL=${SqsQueueUrl}
             SNS_TOPIC_ARN=${SnsTopicArn}
+            DATA_CONSISTENCY_FUNCTION_NAME=${DataConsistencyFunctionName}
             EOF
 
             cat > /etc/systemd/system/aws-image-lab.service <<'EOF'
