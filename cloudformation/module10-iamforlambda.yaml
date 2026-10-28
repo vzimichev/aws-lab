@@ -1,0 +1,51 @@
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM Role for Data Consistency Lambda
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aws-lab
+
+  ImageBucketName:
+    Type: String
+    Description: Existing S3 bucket name
+
+Resources:
+  DataConsistencyLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-DataConsistencyLambdaRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
+      Policies:
+        - PolicyName: S3ImageReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub 'arn:aws:s3:::${ImageBucketName}'
+
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub 'arn:aws:s3:::${ImageBucketName}/*'
+
+Outputs:
+  LambdaRoleArn:
+    Description: IAM Role ARN for Data Consistency Lambda
+    Value: !GetAtt DataConsistencyLambdaRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-DataConsistencyLambdaRoleArn'

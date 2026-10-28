@@ -30,6 +30,14 @@ Parameters:
     Default: aws-lab-UploadsNotificationRole
     Description: Name of the Lambda execution role.
 
+  LambdaSubnetIds:
+    Type: CommaDelimitedList
+    Description: Private subnet IDs for the Lambda function.
+
+  LambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for the VPC-connected Lambda.
+
 Resources:
   UploadsNotificationLambdaRole:
     Type: AWS::IAM::Role
@@ -47,6 +55,7 @@ Resources:
       ManagedPolicyArns:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
       Policies:
         - PolicyName: PublishUploadNotifications
           PolicyDocument:
@@ -68,6 +77,10 @@ Resources:
         - x86_64
       Timeout: 30
       Role: !GetAtt UploadsNotificationLambdaRole.Arn
+      VpcConfig:
+        SubnetIds: !Ref LambdaSubnetIds
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
       Code:
         S3Bucket: !Ref CodeS3Bucket
         S3Key: !Ref CodeS3Key

@@ -1,0 +1,70 @@
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: S3 Gateway Endpoint for Data Consistency Lambda
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aws-lab
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  RouteTableIds:
+    Type: CommaDelimitedList
+
+  LambdaSubnetIds:
+    Type: CommaDelimitedList
+    Description: Private subnet IDs for the Lambda function.
+
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: RDS security group that should allow PostgreSQL from Lambda.
+
+Resources:
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      VpcEndpointType: Gateway
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      RouteTableIds: !Ref RouteTableIds
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-S3Endpoint'
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the VPC-connected data consistency Lambda.
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-LambdaSecurityGroup'
+
+  RdsIngressFromLambda:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+Outputs:
+  S3EndpointId:
+    Value: !Ref S3GatewayEndpoint
+
+  LambdaSecurityGroupId:
+    Value: !Ref LambdaSecurityGroup
+    Export:
+      Name: !Sub '${ProjectName}-LambdaSecurityGroupId'
+
+  LambdaSubnetIds:
+    Value: !Join [',', !Ref LambdaSubnetIds]
+    Export:
+      Name: !Sub '${ProjectName}-LambdaSubnetIds'
