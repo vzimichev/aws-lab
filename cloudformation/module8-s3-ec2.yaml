@@ -202,8 +202,9 @@ Resources:
             WantedBy=multi-user.target
             EOF
 
-            systemctl daemon-reload
-            systemctl enable --now aws-image-lab.service
+            systemctl disable --now aws-image-lab.service || true
+            systemctl enable --now docker
+            docker start aws-image-lab
 
 Outputs:
   BucketName:
