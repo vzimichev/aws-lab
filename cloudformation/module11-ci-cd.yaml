@@ -1,0 +1,325 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Module 11 CI/CD resources: GitHub connection, CodeBuild SAM packaging,
+  and CodePipeline deployment through CloudFormation and SAM CodeDeploy.
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    Default: vzimichev/aws-lab
+    Description: GitHub repository in owner/repository form.
+
+  GitHubBranch:
+    Type: String
+    Default: module-11-ci-cd
+
+  ArtifactBucketName:
+    Type: String
+    Default: aws-sam-cli-managed-default-samclisourcebucket-btbfdnuezosb
+    Description: Existing S3 bucket for CodePipeline artifacts and packaged Lambda code.
+
+  LambdaStackName:
+    Type: String
+    Default: aws-lab-module11-sam
+
+  LambdaFunctionName:
+    Type: String
+    Default: aws-lab-UploadsNotificationFunction
+
+  ExistingQueueArn:
+    Type: String
+    Default: arn:aws:sqs:eu-central-1:642155085753:aws-lab-UploadsNotificationQueue
+
+  ExistingTopicArn:
+    Type: String
+    Default: arn:aws:sns:eu-central-1:642155085753:aws-lab-UploadsNotificationTopic
+
+  LambdaSubnetIds:
+    Type: CommaDelimitedList
+    Default: subnet-0fa6ac00e56cf017e,subnet-04bac427c3a95c160
+
+  LambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: sg-0fc54790adab8de5c
+
+Resources:
+  GitHubConnection:
+    Type: AWS::CodeStarConnections::Connection
+    Properties:
+      ConnectionName: aws-lab-module11-github
+      ProviderType: GitHub
+
+  PipelineArtifactBucketAccess:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: Module11PipelineArtifacts
+      Roles:
+        - !Ref CodePipelineRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetBucketVersioning
+              - s3:GetBucketLocation
+              - s3:ListBucket
+            Resource: !Sub arn:${AWS::Partition}:s3:::${ArtifactBucketName}
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:PutObject
+            Resource: !Sub arn:${AWS::Partition}:s3:::${ArtifactBucketName}/*
+          - Effect: Allow
+            Action: codeconnections:UseConnection
+            Resource: !Ref GitHubConnection
+          - Effect: Allow
+            Action:
+              - codebuild:BatchGetBuilds
+              - codebuild:StartBuild
+            Resource: !GetAtt SamPackageProject.Arn
+          - Effect: Allow
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:UpdateStack
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStackResources
+              - cloudformation:GetTemplate
+              - cloudformation:CreateChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:SetStackPolicy
+              - cloudformation:ValidateTemplate
+            Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${LambdaStackName}/*
+          - Effect: Allow
+            Action: iam:PassRole
+            Resource: !GetAtt SamCloudFormationRole.Arn
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-CodePipelineRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-CodeBuildRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: Module11SamPackage
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-SamPackage:*
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:GetBucketVersioning
+                Resource: !Sub arn:${AWS::Partition}:s3:::${ArtifactBucketName}
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: !Sub arn:${AWS::Partition}:s3:::${ArtifactBucketName}/*
+
+  SamCloudFormationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-SamCloudFormationRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: Module11SamDeploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaStackName}-*
+              - Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:PublishVersion
+                  - lambda:CreateAlias
+                  - lambda:UpdateAlias
+                  - lambda:DeleteAlias
+                  - lambda:GetAlias
+                  - lambda:ListVersionsByFunction
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:CreateEventSourceMapping
+                  - lambda:UpdateEventSourceMapping
+                  - lambda:DeleteEventSourceMapping
+                  - lambda:GetEventSourceMapping
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sqs:GetQueueAttributes
+                  - sns:Publish
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - codedeploy:CreateApplication
+                  - codedeploy:DeleteApplication
+                  - codedeploy:GetApplication
+                  - codedeploy:CreateDeploymentGroup
+                  - codedeploy:DeleteDeploymentGroup
+                  - codedeploy:GetDeploymentGroup
+                  - codedeploy:RegisterApplicationRevision
+                  - codedeploy:GetDeploymentConfig
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaStackName}-*
+
+  SamPackageProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${AWS::StackName}-SamPackage
+      Description: Packages the Module 11 SAM Lambda for CloudFormation deployment.
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/standard:8.0
+        ComputeType: BUILD_GENERAL1_SMALL
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: PACKAGE_BUCKET
+            Value: !Ref ArtifactBucketName
+            Type: PLAINTEXT
+      TimeoutInMinutes: 20
+
+  Module11Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn:
+      - PipelineArtifactBucketAccess
+    Properties:
+      Name: !Sub ${AWS::StackName}-Pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucketName
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              Configuration:
+                ConnectionArn: !Ref GitHubConnection
+                FullRepositoryId: !Ref GitHubRepository
+                BranchName: !Ref GitHubBranch
+                OutputArtifactFormat: CODE_ZIP
+              OutputArtifacts:
+                - Name: SourceArtifact
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: SamPackage
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref SamPackageProject
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: BuildArtifact
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: CloudFormationDeploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: !Ref LambdaStackName
+                TemplatePath: BuildArtifact::packaged-template.yaml
+                TemplateConfiguration: BuildArtifact::template-config.json
+                Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+                RoleArn: !GetAtt SamCloudFormationRole.Arn
+              InputArtifacts:
+                - Name: BuildArtifact
+              RunOrder: 1
+
+Outputs:
+  GitHubConnectionArn:
+    Value: !Ref GitHubConnection
+    Description: Authorize this pending connection in the AWS Console before running the pipeline.
+
+  PipelineName:
+    Value: !Ref Module11Pipeline
+
+  CodeBuildProjectName:
+    Value: !Ref SamPackageProject
+
+  CloudFormationExecutionRoleArn:
+    Value: !GetAtt SamCloudFormationRole.Arn
