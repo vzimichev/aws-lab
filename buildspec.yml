@@ -21,9 +21,12 @@ phases:
     commands:
       - zip -j lambda_function.zip lambda_function.py
       - >-
+        printf '%s\n' '{"Parameters":{"LambdaFunctionName":"aws-lab-UploadsNotificationFunction","ExistingQueueArn":"arn:aws:sqs:eu-central-1:642155085753:aws-lab-UploadsNotificationQueue","ExistingTopicArn":"arn:aws:sns:eu-central-1:642155085753:aws-lab-UploadsNotificationTopic","LambdaSubnetIds":"subnet-0fa6ac00e56cf017e,subnet-04bac427c3a95c160","LambdaSecurityGroupId":"sg-0fc54790adab8de5c"}}' > template-config.json
+      - >-
         "$HOME/.local/bin/sam" package --template-file template.yaml --s3-bucket "$PACKAGE_BUCKET" --output-template-file packaged-template.yaml --region "$AWS_DEFAULT_REGION"
 
 artifacts:
   files:
     - packaged-template.yaml
+    - template-config.json
   discard-paths: yes
