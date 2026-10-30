@@ -1,0 +1,29 @@
+version: 0.2
+
+env:
+  shell: bash
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.13
+    commands:
+      - python3 -m pip install --user aws-sam-cli
+
+  pre_build:
+    commands:
+      - >-
+        test -n "${PACKAGE_BUCKET:-}" || { echo "Set PACKAGE_BUCKET to an S3 bucket writable by the CodeBuild role." >&2; exit 1; }
+      - >-
+        "$HOME/.local/bin/sam" --version
+
+  build:
+    commands:
+      - zip -j lambda_function.zip lambda_function.py
+      - >-
+        "$HOME/.local/bin/sam" package --template-file template.yaml --s3-bucket "$PACKAGE_BUCKET" --output-template-file packaged-template.yaml --region "$AWS_DEFAULT_REGION"
+
+artifacts:
+  files:
+    - packaged-template.yaml
+  discard-paths: yes

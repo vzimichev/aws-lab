@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  AWS Lab Module 11: SAM-managed upload notifications from the existing
+  SQS queue to the existing SNS topic.
+
+Parameters:
+  LambdaFunctionName:
+    Type: String
+    Default: aws-lab-UploadsNotificationFunction
+    Description: Name of the upload notification Lambda function.
+
+  ExistingQueueArn:
+    Type: String
+    Description: ARN of the Module 9 SQS queue (visibility timeout at least 180 seconds).
+
+  ExistingTopicArn:
+    Type: String
+    Description: ARN of the Module 9 SNS topic.
+
+  LambdaSubnetIds:
+    Type: CommaDelimitedList
+    Description: Existing private subnet IDs used by the Module 10 Lambda.
+
+  LambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Existing security group used by the VPC-connected Lambda.
+
+Resources:
+  UploadsNotificationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: ConsumeUploadNotifications
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !Ref ExistingQueueArn
+        - PolicyName: PublishUploadNotifications
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref ExistingTopicArn
+
+  UploadsNotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Runtime: python3.13
+      Handler: lambda_function.lambda_handler
+      Architectures:
+        - x86_64
+      Timeout: 30
+      # Before sam package or sam deploy, create the ZIP from the repository root:
+      # zip -j lambda_function.zip lambda_function.py
+      # boto3 is provided by the Python Lambda runtime, as in Module 10.
+      CodeUri: lambda_function.zip
+      Role: !GetAtt UploadsNotificationLambdaRole.Arn
+      VpcConfig:
+        SubnetIds: !Ref LambdaSubnetIds
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref ExistingTopicArn
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Canary10Percent5Minutes
+      Events:
+        UploadNotification:
+          Type: SQS
+          Properties:
+            Queue: !Ref ExistingQueueArn
+            BatchSize: 1
+            Enabled: true
+
+Outputs:
+  LambdaFunctionArn:
+    Description: ARN of the upload notification Lambda function.
+    Value: !GetAtt UploadsNotificationFunction.Arn
+
+  LambdaAliasArn:
+    Description: ARN of the live alias used by the SQS event source mapping.
+    Value: !Ref UploadsNotificationFunction.Alias
+
+  LambdaExecutionRoleArn:
+    Description: ARN of the Lambda execution role.
+    Value: !GetAtt UploadsNotificationLambdaRole.Arn
